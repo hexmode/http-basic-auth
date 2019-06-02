@@ -49,4 +49,14 @@ class Client {
             };
         };
     }
+
+	/**
+	 * Determine if this object has credentials (valid or not) for the url.
+	 *
+	 * @param string $url
+	 * @return bool
+	 */
+	public function hasCreds( string $url ) :bool {
+		if ( $url ) return true;
+	}
 }
