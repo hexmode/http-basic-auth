@@ -20,35 +20,100 @@
  */
 namespace Hexmode\HTTPBasicAuth;
 
+use GuzzleHttp\Exception\RequestException;
+use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Handler\CurlHandler;
+use GuzzleHttp\Middleware;
+use GuzzleHttp\Psr7\Response;
+use GuzzleHttp\Psr7\Request;
 use Psr\Http\Message\RequestInterface;
 
 class Client {
-    protected $cred;
+	/** @param array $cred */
+	protected $cred;
+	/** @param bool $rety */
+	protected $retry;
+	/** @param string $realm */
+	protected $realm;
 
-    /**
-     * @param array $creds [
-     *    'realmName' => [
-     *       'username' => USER,
-     *       'password' => PASSWORD
-     *    ],
-     *    ...
-     *  ]
-     */
-    public function __construct( array $creds = [] ) {
-        $this->cred = $creds;
-    }
+	/**
+	 * @param array $creds [
+	 *    'hostname' => [
+	 *       'username' => USER,
+	 *       'password' => PASSWORD
+	 *    ],
+	 *    'realm' => [
+	 *       'username' => USER,
+	 *       'password' => PASSWORD
+	 *    ],
+	 *    ...
+	 *  ]
+	 */
+	public function __construct( array $creds = [] ) {
+		$this->cred = $creds;
+	}
 
-    public function getHandler( ) {
-        return function ( callable $handler ) {
-            return function ( RequestInterface $request, array $options ) use ( $handler ) {
-                var_dump( [
-                    'handler' => $handler,
-                    'request' => $request,
-                    'options' => $options
-                ] );
-            };
-        };
-    }
+	public function getHandleStack( CurlHandler $handler ) {
+		$stack = HandlerStack::create( $handler );
+		$calls = [
+			'RequestMapper', 'ResponseMapper', 'RetryDecider', 
+			'BodyModifier', 'Logger', 'Redirector', 'Tapper',
+			'ErrorHander', 'HistoryRecorder', 'CookieJar'
+		];
+		foreach ( $calls as $call ) {
+			$caller = [ $this, "get$call" ];
+			if ( is_callable( $caller ) ) {
+				$stack->push( call_user_func( $caller ) );
+			}
+		}
+		return $stack;
+	}
+
+	protected function parseAuthHeader( Response $response ) {
+		$authHeader = $response->getHeader( "WWW-Authenticate" );
+		if ( $authHeader ) {
+			list ( $authType, $realmInfo ) = explode(
+				" ", $authHeader[0], 2
+			);
+			if ( strtolower( $authType ) === "basic" ) {
+				list ( $realmWord, $realm ) = array_map(
+					function ( $str ) {
+						return trim( $str, '\'" ' );
+					},
+					explode( "=", $realmInfo, 2 )
+				);
+				if ( strtolower( $realmWord ) === "realm" ) {
+					$this->realm = $realm;
+				}
+				$this->retry = true;
+			}
+		}
+	}
+
+	public function getResponseMapper() {
+		return Middleware::mapResponse(
+			function ( Response $response ) {
+				if ( $response->getStatusCode() === 401 ) {
+					$this->parseAuthHeader( $response );
+				}
+				return $response;
+			}
+		);
+	}
+
+	public function getRetryDecider() {
+		return Middleware::retry(
+			function (
+				$retries
+			) {
+				if ( $retries >= 1 ) {
+					return false;
+				}
+
+				return $this->retry === true;
+			}
+		);
+	}
 
 	/**
 	 * Determine if this object has credentials (valid or not) for the url.
@@ -57,6 +122,22 @@ class Client {
 	 * @return bool
 	 */
 	public function hasCreds( string $url ) :bool {
-		if ( $url ) return true;
+		$key = $this->getKey( $url );
+		return isset( $this->cred[$key] );
+	}
+
+	public function getKey( string $url ) :string {
+		$parsed = parse_url( $url );
+		return $parsed['host'] ?? null;
+	}
+
+	public function getUsername( string $url ): string {
+		$key = $this->getKey( $url );
+		return $this->cred[$key]['login'];
+	}
+
+	public function getPassword( string $url ): string {
+		$key = $this->getKey( $url );
+		return $this->cred[$key]['password'];
 	}
 }
