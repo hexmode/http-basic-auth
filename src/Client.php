@@ -128,16 +128,16 @@ class Client {
 
 	public function getKey( string $url ) :string {
 		$parsed = parse_url( $url );
-		return $parsed['host'] ?? null;
+		return $parsed['host'] ?? '';
 	}
 
-	public function getUsername( string $url ): string {
+	public function getUsername( string $url ): ?string {
 		$key = $this->getKey( $url );
-		return $this->cred[$key]['login'];
+		return $this->cred[$key]['login'] ?? null;
 	}
 
-	public function getPassword( string $url ): string {
+	public function getPassword( string $url ): ?string {
 		$key = $this->getKey( $url );
-		return $this->cred[$key]['password'];
+		return $this->cred[$key]['password'] ?? null;
 	}
 }
